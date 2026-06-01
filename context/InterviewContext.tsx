@@ -12,6 +12,7 @@ import { createId } from "@/lib/interview-utils";
 import type {
   AnswerRecord,
   ChatMessage,
+  CompletedInterview,
   ExpertAnswerRewrite,
   InterviewQuestion,
   InterviewStage,
@@ -42,17 +43,6 @@ export type ProfileState = {
   preferredType: string;
 };
 
-export type CompletedInterview = {
-  id: string;
-  date: string;
-  role: string;
-  type: string;
-  score: number;
-  feedback: string;
-  answers: AnswerRecord[];
-  expertAnswerRewrites: ExpertAnswerRewrite[];
-};
-
 type InterviewState = {
   stage: InterviewStage;
   jobDescription: string;
@@ -78,6 +68,7 @@ type InterviewAction =
   | { type: "ADD_ANSWER"; payload: AnswerRecord }
   | { type: "SET_FEEDBACK"; payload: string }
   | { type: "SET_EVALUATION"; payload: { feedback: string; expertAnswerRewrites?: ExpertAnswerRewrite[] } }
+  | { type: "LOAD_REPORT"; payload: { feedback: string; answers: AnswerRecord[]; expertAnswerRewrites?: ExpertAnswerRewrite[] } }
   | { type: "NEXT_QUESTION" }
   | { type: "ADD_TOAST"; payload: Omit<ToastMessage, "id"> }
   | { type: "DISMISS_TOAST"; payload: string }
@@ -87,7 +78,8 @@ type InterviewAction =
   | { type: "LOGIN"; payload: { email: string; name?: string } }
   | { type: "LOGOUT" }
   | { type: "UPDATE_PROFILE"; payload: Partial<ProfileState> }
-  | { type: "ADD_HISTORY"; payload: CompletedInterview };
+  | { type: "ADD_HISTORY"; payload: CompletedInterview }
+  | { type: "SET_HISTORY"; payload: CompletedInterview[] };
 
 const initialState: InterviewState = {
   stage: "idle",
@@ -159,6 +151,14 @@ function reducer(state: InterviewState, action: InterviewAction): InterviewState
         expertAnswerRewrites: action.payload.expertAnswerRewrites || [],
         stage: "finished"
       };
+    case "LOAD_REPORT":
+      return {
+        ...state,
+        feedback: action.payload.feedback,
+        answers: action.payload.answers,
+        expertAnswerRewrites: action.payload.expertAnswerRewrites || [],
+        stage: "finished"
+      };
     case "NEXT_QUESTION":
       return { ...state, currentQuestionIndex: state.currentQuestionIndex + 1 };
     case "ADD_TOAST":
@@ -193,11 +193,19 @@ function reducer(state: InterviewState, action: InterviewAction): InterviewState
         currentView: "dashboard"
       };
     case "LOGOUT":
-      return { ...state, auth: { loggedIn: false, email: "" }, currentView: "landing", stage: "idle" };
+      return {
+        ...state,
+        auth: { loggedIn: false, email: "" },
+        currentView: "landing",
+        stage: "idle",
+        history: []
+      };
     case "UPDATE_PROFILE":
       return { ...state, profile: { ...state.profile, ...action.payload } };
     case "ADD_HISTORY":
       return { ...state, history: [action.payload, ...state.history] };
+    case "SET_HISTORY":
+      return { ...state, history: action.payload };
     default:
       return state;
   }

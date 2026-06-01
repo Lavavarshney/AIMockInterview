@@ -6,6 +6,7 @@ import {
   getAIProvider,
   getEvaluationModel
 } from "@/lib/ai";
+import { performanceLabel, scoreInterview } from "@/lib/scoring";
 import type { EvaluationRequest, ExpertAnswerRewrite } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -22,17 +23,7 @@ export async function POST(request: Request) {
     if (provider === "none") {
       const expertAnswerRewrites = buildLocalRewrites(body.transcript);
       return NextResponse.json({
-        feedback: [
-          "## HireFlow Feedback",
-          "",
-          "No AI provider is configured, so this is a local placeholder report.",
-          "",
-          "### Transcript captured",
-          body.transcript.map((item, index) => `${index + 1}. **${item.question}**\n\n${item.answer}`).join("\n\n"),
-          "",
-          "### Next step",
-          "Add `GEMINI_API_KEY`, `GROQ_API_KEY`, or `OPENAI_API_KEY` to `.env.local` to enable AI evaluation."
-        ].join("\n"),
+        feedback: buildLocalEvaluation(body, "No AI provider is configured, so this strict local rubric was used."),
         expertAnswerRewrites
       });
     }
@@ -47,9 +38,9 @@ export async function POST(request: Request) {
     const screenshots = body.transcript.filter((item) => item.screenshot);
 
     const system =
-      "You are a senior hiring interviewer. Evaluate the candidate using the job description, resume, transcript, non-verbal metrics, and any screenshots. Return a structured Markdown report with: Overall recommendation, Scorecard, Strengths, Concerns, Question-by-question feedback, Resume-specific probing quality, Non-verbal feedback, Screenshot observations, and Concrete next practice plan.";
+      "You are a strict senior hiring interviewer. Evaluate only the evidence in the transcript, resume, job description, non-verbal metrics, and screenshots. Do not inflate results, do not invent strengths, and do not reward skipped, empty, vague, or barely relevant answers. Skipped/empty answers score 0. Very short answers without examples or metrics must stay below 40/100. Return a structured Markdown report with: Overall recommendation, Overall score out of 100, Scorecard, Strengths, Concerns, Question-by-question feedback with evidence, Resume-specific probing quality, Non-verbal feedback, Screenshot observations, and Concrete next practice plan.";
     const nonVerbalText = body.nonVerbalMetrics
-      ? `\n\nNon-verbal metrics:\nEye contact: ${body.nonVerbalMetrics.eyeContactPercent}%\nLooking away: ${body.nonVerbalMetrics.lookingAwayPercent}%\nFace visible: ${body.nonVerbalMetrics.faceVisiblePercent}%\nExpression positivity proxy: ${body.nonVerbalMetrics.expressionPositivity}%\nSamples: ${body.nonVerbalMetrics.samples}`
+      ? `\n\nNon-verbal metrics:\nEye contact: ${body.nonVerbalMetrics.eyeContactPercent}%\nLooking away: ${body.nonVerbalMetrics.lookingAwayPercent}%\nFace visible: ${body.nonVerbalMetrics.faceVisiblePercent}%\nExpression positivity proxy: ${body.nonVerbalMetrics.expressionPositivity}%\nPresence confidence: ${body.nonVerbalMetrics.confidenceScore}%\nSamples: ${body.nonVerbalMetrics.samples}`
       : "\n\nNon-verbal metrics: Not captured.";
 
     if (provider === "gemini") {
@@ -72,7 +63,10 @@ export async function POST(request: Request) {
         const expertAnswerRewrites = await buildExpertAnswerRewrites(body, transcriptText);
         return NextResponse.json({ feedback, expertAnswerRewrites });
       } catch {
-        return NextResponse.json({ feedback: buildLocalEvaluation(body.jobDescription, transcriptText) });
+        return NextResponse.json({
+          feedback: buildLocalEvaluation(body, "Gemini evaluation failed, so this strict local rubric was used."),
+          expertAnswerRewrites: buildLocalRewrites(body.transcript)
+        });
       }
     }
 
@@ -120,7 +114,10 @@ export async function POST(request: Request) {
         expertAnswerRewrites
       });
     } catch {
-      return NextResponse.json({ feedback: buildLocalEvaluation(body.jobDescription, transcriptText) });
+      return NextResponse.json({
+        feedback: buildLocalEvaluation(body, "AI provider evaluation failed, so this strict local rubric was used."),
+        expertAnswerRewrites: buildLocalRewrites(body.transcript)
+      });
     }
   } catch (error) {
     return NextResponse.json(
@@ -130,24 +127,55 @@ export async function POST(request: Request) {
   }
 }
 
-function buildLocalEvaluation(jobDescription: string, transcriptText: string) {
+function buildLocalEvaluation(body: EvaluationRequest, reason: string) {
+  const performance = scoreInterview(body.transcript);
+  const rows = performance.answerScores.map((item, index) => {
+    const answer = item.answer.answer.trim() || "[No response]";
+    return [
+      `### Q${index + 1}: ${item.answer.question}`,
+      "",
+      `**Score:** ${item.score}/100 (${performanceLabel(item.score)})`,
+      "",
+      `**Candidate answer:** ${answer}`,
+      "",
+      "**What went well:**",
+      ...item.strengths.map((strength) => `- ${strength}`),
+      "",
+      "**What must improve:**",
+      ...item.gaps.map((gap) => `- ${gap}`),
+      ""
+    ].join("\n");
+  });
+
   return [
     "## HireFlow Feedback",
     "",
-    "AI provider request failed, so this is a local fallback report.",
+    reason,
+    "",
+    `**Overall score:** ${performance.overall}/100 (${performanceLabel(performance.overall)})`,
+    "",
+    `**Answered questions:** ${performance.answeredCount}`,
+    "",
+    `**Skipped or missing questions:** ${performance.skippedCount}`,
+    "",
+    `**Average answer length:** ${performance.averageWords} words`,
     "",
     "### Scorecard",
-    "| Skill Area | Rating (1-5, 5 being best) | Justification |",
+    "| Skill Area | Score | Justification |",
     "| --- | --- | --- |",
-    "| Communication | 3 | Answers were captured, but the provider was unavailable so the final rubric is fallback-only. |",
-    "| Technical depth | 3 | The transcript was available, but the model could not be reached for a full evaluation. |",
-    "| Role fit | 3 | Use the transcript and resume-aware questions to rerun the session once the provider is configured. |",
+    `| Domain knowledge | ${performance.domain}/100 | Based on technical/system-design terminology, implementation detail, and role-specific evidence only. |`,
+    `| Articulation | ${performance.articulation}/100 | Based on answer length, structure, certainty, and clarity signals. |`,
+    `| Communication | ${performance.communication}/100 | Based on behavioral examples, ownership, collaboration, and outcome clarity. |`,
     "",
-    "### Transcript captured",
-    transcriptText,
+    "### Question-by-question evidence",
     "",
-    "### Next step",
-    `Retry with a configured provider. Job description length: ${jobDescription.length} characters.`
+    rows.join("\n"),
+    "",
+    "### Next practice plan",
+    "- Give a complete answer for every question.",
+    "- Use a STAR shape for behavioral answers.",
+    "- For technical answers, name concrete APIs, data flow, tradeoffs, tests, reliability, and metrics.",
+    "- Avoid saying skip, not sure, or I do not know unless you immediately explain how you would investigate."
   ].join("\n");
 }
 

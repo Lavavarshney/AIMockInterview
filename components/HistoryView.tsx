@@ -1,6 +1,7 @@
 "use client";
 
-import { useInterview, type CompletedInterview } from "@/context/InterviewContext";
+import { useInterview } from "@/context/InterviewContext";
+import type { CompletedInterview } from "@/lib/types";
 import { useState } from "react";
 
 export function HistoryView() {
@@ -18,12 +19,12 @@ export function HistoryView() {
 
   function handleViewReport(report: CompletedInterview) {
     dispatch({
-      type: "SET_EVALUATION",
-      payload: { feedback: report.feedback, expertAnswerRewrites: report.expertAnswerRewrites }
-    });
-    dispatch({ type: "SET_STAGE", payload: "finished" });
-    report.answers.forEach((ans) => {
-      dispatch({ type: "ADD_ANSWER", payload: ans });
+      type: "LOAD_REPORT",
+      payload: {
+        feedback: report.feedback,
+        answers: report.answers,
+        expertAnswerRewrites: report.expertAnswerRewrites
+      }
     });
     dispatch({ type: "SET_VIEW", payload: "report" });
   }

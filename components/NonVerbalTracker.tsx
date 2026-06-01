@@ -90,7 +90,7 @@ export function NonVerbalTracker({
       </div>
 
       {/* Telemetry Metrics display */}
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid gap-2 sm:grid-cols-4">
         <MetricCard
           label="Eye Contact"
           value={isTracking ? metrics.eyeContactPercent : 0}
@@ -106,6 +106,12 @@ export function NonVerbalTracker({
         <MetricCard
           label="Face Visible"
           value={isTracking ? metrics.faceVisiblePercent : 0}
+          active={isTracking}
+          theme="teal"
+        />
+        <MetricCard
+          label="Presence Confidence"
+          value={isTracking ? metrics.confidenceScore : 0}
           active={isTracking}
           theme="teal"
         />

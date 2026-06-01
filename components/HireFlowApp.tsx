@@ -1,7 +1,7 @@
-﻿"use client";
+"use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useUser } from "@clerk/nextjs";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAuth, useUser } from "@clerk/nextjs";
 import { LandingPage } from "@/components/LandingPage";
 import { AuthPage } from "@/components/AuthPage";
 import { DashboardView } from "@/components/DashboardView";
@@ -20,29 +20,8 @@ import { useScreenCapture } from "@/hooks/useScreenCapture";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useSpeechSynthesis } from "@/hooks/useSpeechSynthesis";
 import { isCodingQuestion } from "@/lib/interview-utils";
-import type { AnswerRecord, EvaluationResponse, InterviewQuestion } from "@/lib/types";
-
-function calculateSessionScore(transcript: AnswerRecord[]) {
-  if (!transcript.length) return 0;
-
-  const total = transcript.reduce((sum, item) => {
-    const answer = item.answer.trim();
-    const lowerAnswer = answer.toLowerCase();
-    let score = 45;
-
-    if (answer.length > 40) score += 10;
-    if (answer.length > 120) score += 15;
-    if (/\b(example|metric|measured|impact|tradeoff|because|latency|scale|users|reliability|observability)\b/i.test(answer)) {
-      score += 15;
-    }
-    if (item.screenshot) score += 5;
-    if (/\b(skip|don't know|dont know|not sure|no idea)\b/.test(lowerAnswer)) score -= 20;
-
-    return sum + Math.max(0, Math.min(100, score));
-  }, 0);
-
-  return Math.round(total / transcript.length);
-}
+import { scoreInterview } from "@/lib/scoring";
+import type { AnswerRecord, CompletedInterview, EvaluationResponse, InterviewQuestion } from "@/lib/types";
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
   return new Promise<T>((resolve, reject) => {
@@ -71,6 +50,7 @@ function buildQuickFollowUp(answer: string) {
 export function HireFlowApp() {
   const { state, dispatch } = useInterview();
   const { user, isLoaded } = useUser();
+  const { isLoaded: isAuthLoaded, isSignedIn, getToken } = useAuth();
   const [resumeText, setResumeText] = useState("");
   const [resumeFileName, setResumeFileName] = useState("");
   const [parsingResume, setParsingResume] = useState(false);
@@ -85,6 +65,20 @@ export function HireFlowApp() {
   const [activeQuestion, setActiveQuestion] = useState<InterviewQuestion | null>(null);
   const [followUpsAsked, setFollowUpsAsked] = useState<Set<string>>(() => new Set());
   const [voiceNeedsReview, setVoiceNeedsReview] = useState(false);
+  const historyLoadedRef = useRef(false);
+  const [evaluationSeconds, setEvaluationSeconds] = useState(0);
+
+  useEffect(() => {
+    if (state.stage === "evaluating") {
+      setEvaluationSeconds(0);
+      const timer = setInterval(() => {
+        setEvaluationSeconds((prev) => prev + 1);
+      }, 1000);
+      return () => clearInterval(timer);
+    } else {
+      setEvaluationSeconds(0);
+    }
+  }, [state.stage]);
 
   const currentQuestion = activeQuestion || state.questions[state.currentQuestionIndex];
   const progress = state.questions.length ? state.currentQuestionIndex + 1 : 0;
@@ -92,7 +86,7 @@ export function HireFlowApp() {
 
   useEffect(() => {
     const email = user?.primaryEmailAddress?.emailAddress;
-    if (isLoaded && email && !state.auth.loggedIn) {
+    if (isLoaded && isAuthLoaded && isSignedIn && email && !state.auth.loggedIn) {
       dispatch({
         type: "LOGIN",
         payload: {
@@ -101,13 +95,69 @@ export function HireFlowApp() {
         }
       });
     }
-  }, [dispatch, isLoaded, state.auth.loggedIn, user]);
+  }, [dispatch, isAuthLoaded, isLoaded, isSignedIn, state.auth.loggedIn, user]);
 
-  async function postJson<TResponse>(url: string, body: unknown, retries = 1): Promise<TResponse> {
+  async function buildAuthHeaders() {
+    const headers: HeadersInit = {};
+    const token = await getToken();
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    return headers;
+  }
+
+  const loadHistory = useCallback(async () => {
     try {
+      console.log("[Frontend] Loading history...");
+      if (!isAuthLoaded || !isSignedIn) {
+        console.log("[Frontend] Clerk session not ready, skipping history load");
+        return;
+      }
+      const response = await fetch("/api/history", {
+        method: "GET",
+        headers: await buildAuthHeaders(),
+        credentials: "include"
+      });
+      const data = await response.json();
+      console.log("[Frontend] History response status:", response.status, "data:", data);
+      if (!response.ok) {
+        console.warn("[Frontend] API returned error, falling back to localStorage");
+        // Fallback to localStorage if API fails
+        const stored = localStorage.getItem("interview_history");
+        if (stored) {
+          dispatch({ type: "SET_HISTORY", payload: JSON.parse(stored) });
+          return;
+        }
+        throw new Error(data.error || "Unable to load history.");
+      }
+      console.log("[Frontend] Setting history:", data.sessions?.length || 0, "sessions");
+      dispatch({ type: "SET_HISTORY", payload: data.sessions || [] });
+    } catch (error) {
+      console.error("[Frontend] Load history error:", error);
+      dispatch({
+        type: "ADD_TOAST",
+        payload: { type: "error", message: error instanceof Error ? error.message : "Unable to load history." }
+      });
+    }
+  }, [dispatch, isAuthLoaded, isSignedIn]);
+
+  useEffect(() => {
+    if (!state.auth.loggedIn) {
+      historyLoadedRef.current = false;
+      return;
+    }
+    if (historyLoadedRef.current) return;
+    historyLoadedRef.current = true;
+    void loadHistory();
+  }, [loadHistory, state.auth.loggedIn]);
+
+  const postJson = useCallback(async <TResponse,>(url: string, body: unknown, retries = 1): Promise<TResponse> => {
+    try {
+      const authHeaders = await buildAuthHeaders();
       const response = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders },
+        credentials: "include",
         body: JSON.stringify(body)
       });
       const data = await response.json();
@@ -117,7 +167,32 @@ export function HireFlowApp() {
       if (retries > 0) return postJson<TResponse>(url, body, retries - 1);
       throw error;
     }
-  }
+  }, [getToken]);
+
+  const persistHistory = useCallback(async (session: CompletedInterview) => {
+    if (!state.auth.loggedIn) {
+      console.log("[Frontend] Not logged in, skipping persist");
+      return;
+    }
+    try {
+      console.log("[Frontend] Persisting session:", session.id);
+      await postJson("/api/history", { session }, 0);
+      console.log("[Frontend] Session persisted successfully");
+    } catch (error) {
+      console.error("[Frontend] Persist error, falling back to localStorage:", error);
+      // Fallback: also save to localStorage
+      const stored = localStorage.getItem("interview_history") || "[]";
+      const history = JSON.parse(stored) as CompletedInterview[];
+      history.unshift(session);
+      localStorage.setItem("interview_history", JSON.stringify(history));
+      console.log("[Frontend] Session saved to localStorage as fallback");
+      
+      dispatch({
+        type: "ADD_TOAST",
+        payload: { type: "info", message: "Session saved locally (database sync pending)" }
+      });
+    }
+  }, [dispatch, postJson, state.auth.loggedIn]);
 
   function openSystemChecks() {
     dispatch({ type: "SET_VIEW", payload: "checks" });
@@ -234,7 +309,6 @@ export function HireFlowApp() {
     setManualAnswer("");
     setVoiceNeedsReview(false);
     recognition.clearTranscript();
-    capture.stopSharing();
 
     const fullTranscript = [...state.answers, record];
     const currentQuestionId = String(currentQuestion.id);
@@ -261,16 +335,52 @@ export function HireFlowApp() {
       return;
     }
 
-    await evaluate(fullTranscript);
+    await evaluate(completeTranscriptWithSkipped(fullTranscript));
+  }
+
+  function buildSkippedRecord(question: InterviewQuestion): AnswerRecord {
+    return {
+      questionId: String(question.id),
+      question: question.question,
+      type: question.type,
+      answer: "[Skipped]"
+    };
+  }
+
+  function completeTranscriptWithSkipped(transcript: AnswerRecord[]) {
+    const seen = new Set(transcript.map((item) => String(item.questionId)));
+    const missing = state.questions
+      .filter((question) => !seen.has(String(question.id)))
+      .map((question) => buildSkippedRecord(question));
+    return [...transcript, ...missing];
   }
 
   async function handleSkip() {
+    if (!currentQuestion) return;
+    const skippedRecord = buildSkippedRecord(currentQuestion);
+    const fullTranscript = [...state.answers, skippedRecord];
+    dispatch({ type: "ADD_ANSWER", payload: skippedRecord });
+    dispatch({ type: "ADD_CHAT", payload: { role: "candidate", content: "Skipped question." } });
+    setManualAnswer("");
+    recognition.clearTranscript();
+
+    if (String(currentQuestion.id).includes("-follow-up")) {
+      const nextIndexAfterFollowUp = state.currentQuestionIndex + 1;
+      if (nextIndexAfterFollowUp < state.questions.length) {
+        dispatch({ type: "NEXT_QUESTION" });
+        await askQuestion(state.questions[nextIndexAfterFollowUp]);
+      } else {
+        await evaluate(completeTranscriptWithSkipped(fullTranscript));
+      }
+      return;
+    }
+
     const nextIndex = state.currentQuestionIndex + 1;
     if (nextIndex < state.questions.length) {
       dispatch({ type: "NEXT_QUESTION" });
       await askQuestion(state.questions[nextIndex]);
     } else {
-      await evaluate(state.answers);
+      await evaluate(completeTranscriptWithSkipped(fullTranscript));
     }
   }
 
@@ -305,10 +415,11 @@ export function HireFlowApp() {
       nonVerbal.stop();
       dispatch({ type: "SET_EVALUATION", payload: data });
 
-      const newScore = calculateSessionScore(transcript);
+      const performance = scoreInterview(transcript, state.questions.length);
+      const newScore = performance.overall;
       const newSession = {
         id: `session-${Date.now()}`,
-        date: new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }),
+        date: new Date().toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }),
         role: state.profile.targetRole || "Untitled role",
         type: state.profile.preferredType,
         score: newScore,
@@ -317,6 +428,7 @@ export function HireFlowApp() {
         expertAnswerRewrites: data.expertAnswerRewrites || []
       };
       dispatch({ type: "ADD_HISTORY", payload: newSession });
+      await persistHistory(newSession);
       dispatch({ type: "SET_VIEW", payload: "report" });
     } catch (error) {
       dispatch({
@@ -330,15 +442,16 @@ export function HireFlowApp() {
 
       const newSession = {
         id: `session-${Date.now()}`,
-        date: new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }),
+        date: new Date().toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }),
         role: state.profile.targetRole || "Untitled role",
         type: state.profile.preferredType,
-        score: calculateSessionScore(transcript),
+        score: scoreInterview(transcript, state.questions.length).overall,
         feedback: rawFeedback,
         answers: transcript,
         expertAnswerRewrites: []
       };
       dispatch({ type: "ADD_HISTORY", payload: newSession });
+      await persistHistory(newSession);
       dispatch({ type: "SET_VIEW", payload: "report" });
     }
   }
@@ -348,6 +461,39 @@ export function HireFlowApp() {
   return (
     <>
       <ToastStack />
+
+      {/* Premium full-screen loading analytics loader */}
+      {state.stage === "evaluating" && (
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#090d12]/95 backdrop-blur-md animate-fade-in select-none">
+          <div className="flex flex-col items-center space-y-6 max-w-sm w-full px-6">
+            
+            {/* Purple circular icon with sparkle SVG */}
+            <div className="relative h-20 w-20 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center shadow-[0_0_30px_rgba(124,58,237,0.4)] border border-violet-400/20">
+              <svg className="w-10 h-10 text-white animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+              </svg>
+              {/* Spinning/pulsing accent ring */}
+              <div className="absolute inset-0 rounded-full border-2 border-t-white border-r-transparent border-b-transparent border-l-transparent animate-spin" />
+            </div>
+
+            {/* Subtext captions matching REMASTO style */}
+            <div className="text-center space-y-2">
+              <h3 className="text-xl font-extrabold text-white tracking-tight">Loading your analytics</h3>
+              <p className="text-xs text-slate-400 font-medium font-sans">
+                Building a strict scorecard from your transcript. Elapsed {evaluationSeconds}s.
+              </p>
+            </div>
+
+            {/* Indeterminate progress only; no fake percentage or time estimate */}
+            <div className="w-full h-1.5 bg-slate-950 border border-white/5 rounded-full overflow-hidden relative shadow-inner">
+              <div
+                className="h-full w-full bg-gradient-to-r from-violet-500 to-indigo-500 rounded-full shadow-[0_0_8px_rgba(124,58,237,0.5)] animate-pulse"
+              />
+            </div>
+
+          </div>
+        </div>
+      )}
 
       {/* Render Public Landing Page separately without sidebar layout */}
       {currentView === "landing" && (
@@ -412,7 +558,7 @@ export function HireFlowApp() {
               setVoiceNeedsReview={setVoiceNeedsReview}
               onSubmit={submitAnswer}
               onSkip={handleSkip}
-              onEnd={() => evaluate(state.answers)}
+              onEnd={() => evaluate(completeTranscriptWithSkipped(state.answers))}
               handleVoiceAnswer={handleVoiceAnswer}
               handleScreenStart={handleScreenStart}
               handleScreenshotCapture={handleScreenshotCapture}
@@ -447,4 +593,3 @@ export function HireFlowApp() {
     </>
   );
 }
-

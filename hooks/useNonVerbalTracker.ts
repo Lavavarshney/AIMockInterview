@@ -59,12 +59,25 @@ export function useNonVerbalTracker() {
 
   const metrics = useMemo<NonVerbalMetrics>(() => {
     const samples = Math.max(state.samples, 1);
+    const eyeContactPercent = Math.round((state.eyeContact / samples) * 100);
+    const lookingAwayPercent = Math.round(((state.faceVisible - state.eyeContact) / samples) * 100);
+    const faceVisiblePercent = Math.round((state.faceVisible / samples) * 100);
+    const expressionPositivity = Math.round((state.positivity / samples) * 100);
+    const confidenceScore = clampPercent(
+      Math.round(
+        eyeContactPercent * 0.52 +
+          faceVisiblePercent * 0.28 +
+          expressionPositivity * 0.2 -
+          lookingAwayPercent * 0.2
+      )
+    );
     return {
       samples: state.samples,
-      eyeContactPercent: Math.round((state.eyeContact / samples) * 100),
-      lookingAwayPercent: Math.round(((state.faceVisible - state.eyeContact) / samples) * 100),
-      faceVisiblePercent: Math.round((state.faceVisible / samples) * 100),
-      expressionPositivity: Math.round((state.positivity / samples) * 100)
+      eyeContactPercent,
+      lookingAwayPercent,
+      faceVisiblePercent,
+      expressionPositivity,
+      confidenceScore
     };
   }, [state]);
 
@@ -220,4 +233,8 @@ export function useNonVerbalTracker() {
     start,
     stop
   };
+}
+
+function clampPercent(value: number) {
+  return Math.min(100, Math.max(0, value));
 }

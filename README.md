@@ -38,6 +38,12 @@ CLERK_SECRET_KEY=your_clerk_secret_key
 
 Enable Google as a social connection in the Clerk dashboard if you want the Clerk modal to show Google login.
 
+For PostgreSQL history persistence:
+
+```bash
+DATABASE_URL=postgres://user:password@host:5432/hireflow
+```
+
 For Gemini, set:
 
 ```bash

@@ -186,7 +186,7 @@ export function SetupView({
                     onResumeFileNameChange(file.name);
                     try {
                       const arrayBuffer = await file.arrayBuffer();
-                      const pdfjs: any = await import("pdfjs-dist/legacy/build/pdf");
+                      const pdfjs: any = await import("pdfjs-dist/build/pdf");
                       pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
                       const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
                       let extracted = "";

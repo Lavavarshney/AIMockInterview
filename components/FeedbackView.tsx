@@ -3,10 +3,9 @@
 import { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { performanceLabel, scoreInterview } from "@/lib/scoring";
 import type { AnswerRecord, ExpertAnswerRewrite, NonVerbalMetrics } from "@/lib/types";
 import { useSpeechSynthesis } from "@/hooks/useSpeechSynthesis";
-
-type ReportMode = "manager" | "detailed";
 
 type FeedbackViewProps = {
   feedback: string;
@@ -16,27 +15,78 @@ type FeedbackViewProps = {
   onReset: () => void;
 };
 
-export function FeedbackView({ feedback, answers, expertAnswerRewrites, nonVerbalMetrics, onReset }: FeedbackViewProps) {
-  const [mode, setMode] = useState<ReportMode>("manager");
-  const [copyLabel, setCopyLabel] = useState("Copy Report");
+// Seniority mapping helper
+function getSeniorityIndex(score: number): number {
+  if (score < 20) return 0;
+  if (score < 40) return 1;
+  if (score < 60) return 2;
+  if (score < 75) return 3;
+  if (score < 90) return 4;
+  return 5;
+}
+
+const SENIORITY_TIERS = [
+  "Incomplete Response",
+  "Entry-Level",
+  "Developing",
+  "Professional",
+  "Advanced Professional",
+  "Expert"
+];
+
+const TIER_COLORS = {
+  0: "text-rose-400",
+  1: "text-amber-400",
+  2: "text-emerald-400",
+  3: "text-violet-400",
+  4: "text-fuchsia-400",
+  5: "text-pink-400"
+};
+
+export function FeedbackView({
+  feedback,
+  answers,
+  expertAnswerRewrites,
+  nonVerbalMetrics,
+  onReset
+}: FeedbackViewProps) {
+  const [activeQuestionTab, setActiveQuestionTab] = useState(0);
+  const [showRecommendedAnswer, setShowRecommendedAnswer] = useState<Record<number, boolean>>({});
   const speech = useSpeechSynthesis();
 
+  // Deduplicated list of screenshots
   const screenshots = answers.filter((answer) => answer.screenshot);
-  const answerInsights = useMemo(
-    () => answers.map((answer, index) => getAnswerInsight(answer, index)),
-    [answers]
-  );
 
-  const overallConfidence =
-    answerInsights.length > 0
-      ? Math.round(answerInsights.reduce((total, insight) => total + insight.score, 0) / answerInsights.length)
-      : 0;
+  // Compute question-by-question metrics
+  const answerInsights = useMemo(() => {
+    return scoreInterview(answers).answerScores.map((insight) => {
+      const answer = insight.answer;
+      const matchingRewrite = expertAnswerRewrites.find(
+        (r) => String(r.questionId) === String(answer.questionId)
+      );
 
-  const weakAnswers = [...answerInsights].sort((left, right) => left.score - right.score).slice(0, 2);
-  const followUps = weakAnswers.map((insight) => insight.followUp);
-  const topSignals = [...answerInsights].sort((left, right) => right.score - left.score).slice(0, 2);
-  const recommendation = getRecommendation(overallConfidence, weakAnswers.length);
-  const managerSummary = buildManagerSummary(recommendation, overallConfidence, answerInsights, weakAnswers);
+      return {
+        answer,
+        score: insight.score,
+        whatWentWell: insight.strengths,
+        whatCouldBeBetter: insight.gaps,
+        missingTerminologies: matchingRewrite?.missingSignals?.length
+          ? matchingRewrite.missingSignals
+          : insight.missingSignals,
+        matchingRewrite
+      };
+    });
+  }, [answers, expertAnswerRewrites]);
+
+  // Overall calculations
+  const performance = useMemo(() => scoreInterview(answers), [answers]);
+  const overallConfidence = performance.overall;
+  const domainScore = performance.domain;
+  const articulationScore = performance.articulation;
+  const communicationScore = performance.communication;
+
+  const activeInsight = answerInsights[activeQuestionTab];
+  const activeTimelineIndex = getSeniorityIndex(overallConfidence);
 
   async function handlePlayAnswer(text: string) {
     try {
@@ -46,421 +96,287 @@ export function FeedbackView({ feedback, answers, expertAnswerRewrites, nonVerba
     }
   }
 
-  async function handleCopyAllFollowUps() {
-    if (!followUps.length) return;
-    const payload = followUps.join("\n\n");
-    await navigator.clipboard.writeText(payload);
-  }
-
-  async function handleCopyReport() {
-    await navigator.clipboard.writeText(feedback);
-    setCopyLabel("Copied");
-    window.setTimeout(() => setCopyLabel("Copy Report"), 1500);
+  function handleCopyReport() {
+    void navigator.clipboard.writeText(feedback);
   }
 
   function handleDownloadReport() {
     const blob = new Blob([feedback], { type: "text/markdown;charset=utf-8" });
     const downloadUrl = URL.createObjectURL(blob);
     const link = document.createElement("a");
-
     link.href = downloadUrl;
     link.download = "hireflow-feedback.md";
     link.click();
-
     URL.revokeObjectURL(downloadUrl);
   }
 
-  const markdownComponents = {
-    table({ children }: { children: React.ReactNode }) {
-      return (
-        <div className="my-6 overflow-x-auto rounded-xl border border-white/5 bg-slate-950/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-          <table className="min-w-full border-collapse text-left text-sm">{children}</table>
-        </div>
-      );
-    },
-    thead({ children }: { children: React.ReactNode }) {
-      return <thead className="bg-white/5 text-[10px] uppercase tracking-[0.16em] text-slate-400">{children}</thead>;
-    },
-    th({ children }: { children: React.ReactNode }) {
-      return <th className="border-b border-white/5 px-4 py-3 font-semibold text-slate-200">{children}</th>;
-    },
-    td({ children }: { children: React.ReactNode }) {
-      return <td className="border-b border-white/5 px-4 py-3 align-top text-slate-300">{children}</td>;
-    },
-    tr({ children }: { children: React.ReactNode }) {
-      return <tr className="odd:bg-white/[0.01] hover:bg-white/[0.03] transition-colors">{children}</tr>;
-    }
-  };
-
   return (
-    <section className="space-y-8 animate-fade-in">
-      
-      {/* Top Banner Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/5 pb-5">
-        <div>
-          <p className="text-[10px] uppercase tracking-[0.2em] font-semibold text-teal-400">Evaluation Hub</p>
-          <h2 className="mt-1 text-2xl font-bold text-white tracking-tight">Assessment Dashboard</h2>
-        </div>
-        
-        <div className="flex flex-wrap gap-2">
-          <div className="rounded-md border border-white/5 bg-slate-900/60 p-0.5 flex">
-            <button
-              type="button"
-              onClick={() => setMode("manager")}
-              className={`rounded px-4 py-2 text-xs font-semibold uppercase tracking-wider transition ${
-                mode === "manager"
-                  ? "bg-teal-400 text-slate-950 shadow"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              Summary Brief
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("detailed")}
-              className={`rounded px-4 py-2 text-xs font-semibold uppercase tracking-wider transition ${
-                mode === "detailed"
-                  ? "bg-teal-400 text-slate-950 shadow"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              Detailed Report
-            </button>
+    <section className="space-y-8 animate-fade-in text-slate-100 max-w-7xl mx-auto">
+      {/* Top Banner Toolbar matching REMASTO */}
+      <div className="rounded-2xl border border-white/5 bg-[#121820]/80 p-6 flex flex-wrap items-center justify-between gap-6 shadow-xl">
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400 font-mono">
+            <span>Position: <strong className="text-white">Software Engineer</strong></span>
+            <span className="hidden sm:inline text-slate-700">•</span>
+            <span>Round: <strong className="text-white">Role Related</strong></span>
+            <span className="hidden sm:inline text-slate-700">•</span>
+            <span>Practiced On: <strong className="text-white">{new Date().toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</strong></span>
+            <span className="hidden sm:inline text-slate-700">•</span>
+            <span>Answered: <strong className="text-white">{performance.answeredCount}</strong></span>
+            <span className="hidden sm:inline text-slate-700">•</span>
+            <span>Skipped: <strong className="text-white">{performance.skippedCount}</strong></span>
           </div>
-          
-          <button
-            type="button"
-            onClick={() => void handleCopyReport()}
-            className="rounded-md border border-white/5 bg-slate-900/60 hover:bg-slate-800 px-4 py-2 text-xs font-semibold uppercase tracking-wider text-slate-200 transition"
-          >
-            {copyLabel}
-          </button>
-          
-          <button
-            type="button"
-            onClick={handleDownloadReport}
-            className="rounded-md border border-white/5 bg-slate-900/60 hover:bg-slate-800 px-4 py-2 text-xs font-semibold uppercase tracking-wider text-slate-200 transition"
-          >
-            Download Markdown
-          </button>
-          
+        </div>
+
+        <div className="flex flex-wrap gap-2.5">
           <button
             type="button"
             onClick={onReset}
-            className="rounded-md bg-teal-400 hover:bg-teal-300 text-slate-950 px-4 py-2 text-xs font-bold uppercase tracking-wider transition shadow-[0_0_15px_rgba(45,212,191,0.2)]"
+            className="rounded-lg border border-white/10 hover:border-white/20 bg-white/5 hover:bg-white/10 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-slate-200 transition"
           >
-            Reset Session
+            Try Same Interview Again
+          </button>
+          
+          <button
+            type="button"
+            onClick={handleCopyReport}
+            className="rounded-lg bg-gradient-to-r from-violet-500 to-indigo-600 hover:from-violet-400 hover:to-indigo-500 text-white px-5 py-2.5 text-xs font-bold uppercase tracking-wider transition shadow-[0_0_15px_rgba(124,58,237,0.2)]"
+          >
+            Report
+          </button>
+
+          <button
+            type="button"
+            onClick={handleDownloadReport}
+            className="rounded-lg bg-gradient-to-r from-violet-500 to-indigo-600 hover:from-violet-400 hover:to-indigo-500 text-white px-5 py-2.5 text-xs font-bold uppercase tracking-wider transition shadow-[0_0_15px_rgba(124,58,237,0.2)]"
+          >
+            Certificate
           </button>
         </div>
       </div>
 
-      {/* KPI Highlight Matrices */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {/* Rec Card */}
-        <div className={`rounded-xl border p-5 flex flex-col justify-between space-y-4 ${recommendation.tint} shadow-md`}>
-          <div>
-            <span className="text-[10px] uppercase tracking-wider opacity-60 font-semibold">Consensus Call</span>
-            <p className="mt-2 text-3xl font-extrabold tracking-tight">{recommendation.label}</p>
-          </div>
-          <span className="text-xs opacity-85 leading-relaxed">{recommendation.summary}</span>
-        </div>
-
-        {/* Confidence Meter Card */}
-        <div className="rounded-xl border border-white/5 bg-[#121820]/80 backdrop-blur-md p-5 flex flex-col justify-between space-y-4 shadow-md">
-          <div>
-            <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Competency Rating</span>
-            <p className="mt-2 text-3xl font-extrabold text-white tracking-tight">{overallConfidence}%</p>
-          </div>
-          <div className="space-y-1.5">
-            <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
-              <div className="h-full bg-teal-400 rounded-full transition-all duration-1000" style={{ width: `${overallConfidence}%` }} />
-            </div>
-            <p className="text-[10px] text-slate-500">Heuristic metric based on answer specification and depth.</p>
-          </div>
-        </div>
-
-        {/* Stats Card */}
-        <div className="rounded-xl border border-white/5 bg-[#121820]/80 backdrop-blur-md p-5 flex flex-col justify-between space-y-4 shadow-md">
-          <div>
-            <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Session Content</span>
-            <p className="mt-2 text-3xl font-extrabold text-white tracking-tight">{answers.length}</p>
-          </div>
-          <p className="text-xs text-slate-400 leading-relaxed">
-            Standard questions answered with visual screenshot captures included for coding assessments.
-          </p>
-        </div>
-
-        {/* Replay Details */}
-        <div className="rounded-xl border border-white/5 bg-[#121820]/80 backdrop-blur-md p-5 flex flex-col justify-between space-y-4 shadow-md">
-          <div>
-            <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Webcam Metrics</span>
-            <p className="mt-2 text-3xl font-extrabold text-white tracking-tight">
-              {nonVerbalMetrics && nonVerbalMetrics.samples > 0 ? `${nonVerbalMetrics.eyeContactPercent}%` : "--"}
-            </p>
-          </div>
-          <p className="text-xs text-slate-400 leading-relaxed">
-            Eye-contact telemetry logged locally during verbal speech simulation phases.
-          </p>
-        </div>
-      </div>
-
-      {/* Main Column Breakdown */}
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-        
-        {/* Left Side: Hiring Manager readout */}
-        <div className="rounded-xl border border-white/5 bg-[#121820]/80 backdrop-blur-md p-6 space-y-6 shadow-xl">
-          <div>
-            <span className="text-[10px] uppercase tracking-widest font-semibold text-teal-400">Briefing Note</span>
-            <h3 className="mt-1 text-lg font-bold text-white tracking-tight">Executive Readout</h3>
-          </div>
-
-          <p className="text-sm leading-relaxed text-slate-300">{managerSummary}</p>
-
-          {/* Strengths & Risks */}
-          <div className="space-y-4 pt-2">
-            <div className="space-y-2">
-              <span className="text-[10px] uppercase tracking-widest text-teal-400 font-bold">Key Strengths</span>
-              <ul className="space-y-2">
-                {topSignals.length ? (
-                  topSignals.map((insight) => (
-                    <li key={`${insight.answer.questionId}-signal`} className="rounded-lg border border-teal-500/10 bg-teal-500/[0.02] px-4 py-3 text-xs leading-relaxed text-slate-200">
-                      {insight.note}
-                    </li>
-                  ))
+      {/* Seniority Timeline Panel */}
+      <div className="rounded-2xl border border-white/5 bg-[#121820]/80 p-6 shadow-xl space-y-6">
+        <div className="flex flex-col items-center space-y-2 relative">
+          {/* Dynamic You Are Here marker row */}
+          <div className="w-full grid grid-cols-6 text-center">
+            {SENIORITY_TIERS.map((_, i) => (
+              <div key={i} className="flex flex-col items-center">
+                {activeTimelineIndex === i ? (
+                  <div className="flex flex-col items-center animate-bounce">
+                    <span className="text-[10px] uppercase tracking-widest text-violet-400 font-extrabold bg-violet-400/10 px-2 py-0.5 rounded border border-violet-500/20">You Are Here</span>
+                    <span className="text-lg text-violet-400 leading-none mt-1">↓</span>
+                  </div>
                 ) : (
-                  <li className="rounded-lg border border-white/5 bg-white/[0.01] px-4 py-3 text-xs text-slate-400">No session metrics available</li>
-                )}
-              </ul>
-            </div>
-
-            <div className="space-y-2">
-              <span className="text-[10px] uppercase tracking-widest text-rose-400 font-bold">Identified Risks</span>
-              <ul className="space-y-2">
-                {weakAnswers.length ? (
-                  weakAnswers.map((insight) => (
-                    <li key={`${insight.answer.questionId}-risk`} className="rounded-lg border border-rose-500/10 bg-rose-500/[0.02] px-4 py-3 text-xs leading-relaxed text-slate-200">
-                      {insight.note}
-                    </li>
-                  ))
-                ) : (
-                  <li className="rounded-lg border border-white/5 bg-white/[0.01] px-4 py-3 text-xs text-slate-400">No risks identified</li>
-                )}
-              </ul>
-            </div>
-          </div>
-        </div>
-
-        {/* Right Side: Follow-up generator */}
-        <div className="rounded-xl border border-white/5 bg-[#121820]/80 backdrop-blur-md p-6 space-y-6 shadow-xl flex flex-col justify-between">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <span className="text-[10px] uppercase tracking-widest font-semibold text-teal-400">Calibration Exercise</span>
-                <h3 className="mt-1 text-lg font-bold text-white tracking-tight">Weakness Probing Exercises</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => void handleCopyAllFollowUps()}
-                disabled={!followUps.length}
-                className="rounded border border-white/5 bg-slate-900/60 hover:bg-slate-800 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-200 transition disabled:opacity-40"
-              >
-                Copy All Exercises
-              </button>
-            </div>
-
-            <p className="text-sm text-slate-300 leading-relaxed">
-              Targeted training tasks compiled specifically based on weaker elements identified in the interview.
-            </p>
-
-            <div className="space-y-3 pt-2">
-              {followUps.length ? (
-                followUps.map((followUp, index) => (
-                  <div key={`${followUp}-${index}`} className="rounded-lg border border-white/5 bg-slate-950/40 px-4 py-3 text-xs leading-relaxed text-slate-300">
-                    <p className="text-[9px] uppercase tracking-widest text-teal-400 font-bold mb-1">PROBE EXERCISE {index + 1}</p>
-                    <p className="text-slate-200">{followUp}</p>
-                  </div>
-                ))
-              ) : (
-                <div className="rounded-lg border border-white/5 bg-white/[0.01] p-4 text-xs text-slate-500 text-center">
-                  Calibration exercises populate automatically when answers are submitted.
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Heuristic scoring disclaimer */}
-          <div className="rounded-lg border border-white/5 bg-slate-950/40 p-4 text-[11px] leading-relaxed text-slate-400 mt-4">
-            The confidence indicator is computed via local evaluation rules. This scoring methodology validates contextual specificity, technical terminology integration, and screen-sharing data.
-          </div>
-        </div>
-
-      </div>
-
-      {/* Scorecard Replay Table */}
-      <div className="rounded-xl border border-white/5 bg-[#121820]/80 backdrop-blur-md p-6 space-y-4 shadow-xl">
-        <div>
-          <span className="text-[10px] uppercase tracking-widest font-semibold text-teal-400">Data Replay</span>
-          <h3 className="mt-1 text-lg font-bold text-white tracking-tight">Question Scorecard & Replays</h3>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="min-w-full border-collapse text-left text-xs">
-            <thead className="bg-slate-950/80 border-b border-white/5 text-[9px] uppercase tracking-widest text-slate-400">
-              <tr>
-                <th className="px-4 py-3 font-semibold text-slate-400 w-12">#</th>
-                <th className="px-4 py-3 font-semibold text-slate-400">Assessment Question</th>
-                <th className="px-4 py-3 font-semibold text-slate-400">Response Verification</th>
-                <th className="px-4 py-3 font-semibold text-slate-400 w-32">Screenshot</th>
-                <th className="px-4 py-3 font-semibold text-slate-400 w-44">Telemetry Node</th>
-                <th className="px-4 py-3 font-semibold text-slate-400 w-24 text-right">Score</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {answerInsights.length ? (
-                answerInsights.map((insight, index) => (
-                  <tr key={insight.answer.questionId} className="hover:bg-white/[0.01] transition-colors">
-                    <td className="px-4 py-4 text-slate-500 font-semibold">{index + 1}</td>
-                    <td className="px-4 py-4 space-y-1">
-                      <p className="font-semibold text-slate-200 leading-relaxed max-w-sm">{insight.answer.question}</p>
-                      <span className="inline-block bg-white/5 border border-white/10 text-[8px] font-bold px-1.5 py-0.5 rounded tracking-widest text-slate-400 uppercase">
-                        {insight.answer.type.replace("_", " ")}
-                      </span>
-                    </td>
-                    <td className="px-4 py-4 space-y-2">
-                      <details className="group">
-                        <summary className="cursor-pointer list-none text-teal-400 hover:text-teal-300 font-bold flex items-center gap-1">
-                          View Answer Transcript
-                          <span className="text-[10px] group-open:rotate-180 transition-transform">▼</span>
-                        </summary>
-                        <p className="mt-2 whitespace-pre-wrap text-slate-300 max-w-md leading-relaxed border-l-2 border-white/10 pl-3 italic">
-                          {insight.answer.answer}
-                        </p>
-                      </details>
-                      
-                      <button
-                        type="button"
-                        onClick={() => void handlePlayAnswer(insight.answer.answer)}
-                        disabled={!speech.isSupported}
-                        className="rounded border border-white/5 bg-slate-900/60 hover:bg-slate-800 px-2 py-1 text-[9px] font-semibold uppercase tracking-wider text-slate-300 transition"
-                      >
-                        Play Audio Synthesis
-                      </button>
-                    </td>
-                    <td className="px-4 py-4">
-                      {insight.answer.screenshot ? (
-                        <span className="inline-block bg-teal-500/10 border border-teal-400/20 text-teal-400 text-[9px] font-bold px-2 py-0.5 rounded tracking-widest uppercase">
-                          Captured
-                        </span>
-                      ) : (
-                        <span className="inline-block bg-white/5 border border-white/10 text-slate-500 text-[9px] font-bold px-2 py-0.5 rounded tracking-widest uppercase">
-                          None
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-4 text-slate-400 leading-relaxed max-w-[180px]">{insight.note}</td>
-                    <td className="px-4 py-4 text-right font-mono font-bold text-teal-400 text-sm">{insight.score}%</td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td className="px-4 py-6 text-slate-500 text-center italic" colSpan={6}>
-                    Assessment metrics require a completed interview session.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Expert Comparison Matrix */}
-      {expertAnswerRewrites.length > 0 && (
-        <div className="rounded-xl border border-white/5 bg-[#121820]/80 backdrop-blur-md p-6 space-y-6 shadow-xl">
-          <div>
-            <span className="text-[10px] uppercase tracking-widest font-semibold text-teal-400">Rewrite Studio</span>
-            <h3 className="mt-1 text-lg font-bold text-white tracking-tight">Expert Side-by-Side Comparisons</h3>
-          </div>
-
-          <div className="space-y-6">
-            {expertAnswerRewrites.map((rewrite, index) => (
-              <div key={`${rewrite.questionId}-${index}`} className="border-b border-white/5 pb-6 last:border-b-0 last:pb-0 space-y-3.5">
-                <h4 className="text-xs font-bold text-white leading-relaxed">
-                  {index + 1}. {rewrite.question}
-                </h4>
-
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <div className="rounded-lg border border-white/5 bg-slate-950/40 p-4 space-y-2">
-                    <span className="text-[9px] uppercase tracking-widest text-slate-400 font-bold">Candidate Transcript</span>
-                    <p className="text-xs leading-relaxed text-slate-300 whitespace-pre-wrap">{rewrite.originalAnswer}</p>
-                  </div>
-                  
-                  <div className="rounded-lg border border-teal-500/10 bg-teal-500/[0.02] p-4 space-y-2">
-                    <span className="text-[9px] uppercase tracking-widest text-teal-400 font-bold">Senior-Level Refinement</span>
-                    <p className="text-xs leading-relaxed text-slate-200 whitespace-pre-wrap">{rewrite.expertAnswer}</p>
-                  </div>
-                </div>
-
-                {rewrite.missingSignals.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 items-center">
-                    <span className="text-[9px] uppercase tracking-widest text-slate-500 font-bold mr-1">Missing Signals:</span>
-                    {rewrite.missingSignals.map((signal) => (
-                      <span key={signal} className="rounded bg-white/5 border border-white/10 px-2 py-0.5 text-[10px] text-slate-300">
-                        {signal}
-                      </span>
-                    ))}
-                  </div>
+                  <div className="h-7" />
                 )}
               </div>
             ))}
           </div>
-        </div>
-      )}
 
-      {/* Non-verbal telemetry gauge block */}
-      {nonVerbalMetrics && nonVerbalMetrics.samples > 0 && (
-        <div className="rounded-xl border border-white/5 bg-[#121820]/80 backdrop-blur-md p-6 space-y-6 shadow-xl">
-          <div>
-            <span className="text-[10px] uppercase tracking-widest font-semibold text-teal-400">Postural Analytics</span>
-            <h3 className="mt-1 text-lg font-bold text-white tracking-tight">Non-Verbal Telemetry Metrics</h3>
+          {/* Timeline segments row */}
+          <div className="w-full h-3 rounded-full bg-slate-900 border border-white/5 overflow-hidden flex">
+            {SENIORITY_TIERS.map((_, i) => (
+              <div
+                key={i}
+                className={`flex-1 h-full border-r border-slate-950 last:border-r-0 transition-all duration-1000 ${
+                  i <= activeTimelineIndex
+                    ? "bg-gradient-to-r from-violet-500 to-indigo-500"
+                    : "bg-slate-950"
+                }`}
+              />
+            ))}
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-4">
-            <MetricProgressCard label="Eye Contact" value={nonVerbalMetrics.eyeContactPercent} theme="teal" />
-            <MetricProgressCard label="Looking Away" value={nonVerbalMetrics.lookingAwayPercent} theme="amber" />
-            <MetricProgressCard label="Face Presence" value={nonVerbalMetrics.faceVisiblePercent} theme="teal" />
-            <MetricProgressCard label="Positivity Index" value={nonVerbalMetrics.expressionPositivity} theme="teal" />
+          {/* Timeline labels row */}
+          <div className="w-full grid grid-cols-6 text-center text-[10px] font-bold uppercase tracking-wider pt-2">
+            {SENIORITY_TIERS.map((tier, i) => (
+              <span
+                key={tier}
+                className={`px-1 transition-colors duration-500 ${
+                  activeTimelineIndex === i ? TIER_COLORS[i as keyof typeof TIER_COLORS] + " font-extrabold" : "text-slate-500"
+                }`}
+              >
+                {tier}
+              </span>
+            ))}
           </div>
         </div>
-      )}
-
-      {/* Narrative markdown scorecard */}
-      <div className="rounded-xl border border-white/5 bg-[#121820]/80 backdrop-blur-md p-6 space-y-4 shadow-xl">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <span className="text-[10px] uppercase tracking-widest font-semibold text-teal-400">Report Ledger</span>
-            <h3 className="mt-1 text-lg font-bold text-white tracking-tight">Full Narrative Report Ledger</h3>
-          </div>
-          <span className="text-xs text-slate-400">
-            {mode === "manager" ? "Collapsed in summary brief mode." : "Expanded in detailed mode."}
-          </span>
-        </div>
-
-        <details className="rounded-lg border border-white/5 bg-slate-950/40 p-4 transition-all duration-300" open={mode === "detailed"}>
-          <summary className="cursor-pointer list-none text-xs font-semibold text-teal-400 hover:text-teal-300 tracking-wide uppercase select-none">
-            Toggle Detailed Narrative Text
-          </summary>
-          <article className="prose prose-invert prose-headings:text-white prose-a:text-teal-400 prose-strong:text-white mt-5 max-w-none prose-table:my-0 prose-thead:border-b-0 prose-th:text-left prose-td:text-left text-xs leading-relaxed">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents as any}>
-              {feedback}
-            </ReactMarkdown>
-          </article>
-        </details>
       </div>
+
+      {/* Four Doughnut Progress Gauges */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <CircularProgress
+          percent={overallConfidence}
+          label={SENIORITY_TIERS[activeTimelineIndex]}
+          subtitle="Interview Level"
+          strokeColor="#10b981" // Green
+        />
+        <CircularProgress
+          percent={domainScore}
+          label={performanceLabel(domainScore)}
+          subtitle="Domain Knowledge"
+          strokeColor="#f97316" // Orange
+        />
+        <CircularProgress
+          percent={articulationScore}
+          label={performanceLabel(articulationScore)}
+          subtitle="Articulation"
+          strokeColor="#a855f7" // Purple
+        />
+        <CircularProgress
+          percent={communicationScore}
+          label={performanceLabel(communicationScore)}
+          subtitle="Communication"
+          strokeColor="#ec4899" // Pink
+        />
+      </div>
+
+      {/* Main Breakdown Grid: Left Question Sidebar + Right Question Insights */}
+      {answerInsights.length > 0 && activeInsight ? (
+        <div className="grid gap-6 lg:grid-cols-[160px_1fr]">
+          {/* Left Vertical Question Tab Selector */}
+          <div className="flex lg:flex-col overflow-x-auto lg:overflow-x-visible gap-1.5 p-1 rounded-xl bg-slate-950/60 border border-white/5 h-fit">
+            {answerInsights.map((_, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => setActiveQuestionTab(i)}
+                className={`flex-shrink-0 w-full rounded-lg py-3 px-4 text-xs font-bold transition-all duration-300 uppercase tracking-widest text-center ${
+                  activeQuestionTab === i
+                    ? "bg-gradient-to-r from-violet-500/10 to-indigo-600/10 border border-violet-500/30 text-violet-400 shadow-[inset_0_1px_0_rgba(124,58,237,0.05)]"
+                    : "border border-transparent text-slate-500 hover:text-slate-300 hover:bg-white/[0.01]"
+                }`}
+              >
+                Q{i + 1}
+              </button>
+            ))}
+          </div>
+
+          {/* Right Question Details Box */}
+          <div className="rounded-2xl border border-white/5 bg-[#121820]/80 p-6 sm:p-8 shadow-2xl space-y-6">
+            <div className="space-y-1">
+              <span className="text-[9px] uppercase tracking-widest text-violet-400 font-extrabold">Question {activeQuestionTab + 1} Details</span>
+              <h3 className="text-md font-bold text-white leading-relaxed">{activeInsight.answer.question}</h3>
+              <span className="inline-block bg-white/5 border border-white/10 text-[8px] font-bold px-1.5 py-0.5 rounded tracking-widest text-slate-400 uppercase">
+                {activeInsight.answer.type.replace("_", " ")}
+              </span>
+            </div>
+
+            <div className="grid gap-6 md:grid-cols-2">
+              {/* What went well */}
+              <div className="space-y-3">
+                <h4 className="text-[10px] uppercase tracking-widest text-emerald-400 font-extrabold">What went well</h4>
+                <ul className="space-y-2">
+                  {activeInsight.whatWentWell.map((item, idx) => (
+                    <li key={idx} className="flex gap-2 text-xs text-slate-300 leading-relaxed items-start">
+                      <span className="text-emerald-400 mt-0.5">•</span>
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {/* What could be better */}
+              <div className="space-y-3">
+                <h4 className="text-[10px] uppercase tracking-widest text-amber-400 font-extrabold">What could be better</h4>
+                <ul className="space-y-2">
+                  {activeInsight.whatCouldBeBetter.map((item, idx) => (
+                    <li key={idx} className="flex gap-2 text-xs text-slate-300 leading-relaxed items-start">
+                      <span className="text-amber-400 mt-0.5">•</span>
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+
+            {/* Missing Terminologies inside grey-shaded card container */}
+            <div className="rounded-xl border border-white/5 bg-slate-950/60 p-4 space-y-3">
+              <h4 className="text-[10px] uppercase tracking-widest text-slate-400 font-extrabold">Missing Terminologies</h4>
+              <div className="flex flex-wrap gap-2">
+                {activeInsight.missingTerminologies.map((tag) => (
+                  <span
+                    key={tag}
+                    className="rounded-full bg-slate-900 border border-white/5 px-3 py-1 text-[10px] font-bold text-slate-300 uppercase tracking-wider"
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {/* GET RECOMMENDED ANSWER Action */}
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setShowRecommendedAnswer((prev) => ({
+                    ...prev,
+                    [activeQuestionTab]: !prev[activeQuestionTab]
+                  }))
+                }
+                className="rounded-lg bg-gradient-to-r from-violet-500 to-indigo-600 hover:from-violet-400 hover:to-indigo-500 text-white px-6 py-3.5 text-xs font-bold uppercase tracking-wider transition shadow-[0_0_15px_rgba(124,58,237,0.2)]"
+              >
+                {showRecommendedAnswer[activeQuestionTab] ? "Hide Recommended Answer" : "Get Recommended Answer"}
+              </button>
+            </div>
+
+            {/* Recommended Answer Side-by-Side Comparison Container */}
+            {showRecommendedAnswer[activeQuestionTab] && (
+              <div className="grid gap-4 md:grid-cols-2 pt-4 border-t border-white/5 animate-fade-in">
+                {/* Candidate Transcript */}
+                <div className="rounded-xl border border-white/5 bg-slate-950/40 p-4 space-y-2">
+                  <span className="text-[8px] uppercase tracking-widest text-slate-400 font-extrabold block">Your Answer Transcript</span>
+                  <p className="text-xs leading-relaxed text-slate-300 whitespace-pre-wrap italic">
+                    &quot;{activeInsight.answer.answer || "No response recorded."}&quot;
+                  </p>
+                </div>
+
+                {/* Expert Answer */}
+                <div className="rounded-xl border border-violet-500/10 bg-violet-500/[0.02] p-4 space-y-2">
+                  <span className="text-[8px] uppercase tracking-widest text-violet-400 font-extrabold block">Senior-Level Refinement</span>
+                  <p className="text-xs leading-relaxed text-slate-200 whitespace-pre-wrap font-medium">
+                    {activeInsight.matchingRewrite?.expertAnswer ||
+                      `Here is an refined approach: Quantify your results and establish clear technical design parameters. Structure your argument by outlining: 1) The technical challenges of the context round. 2) The exact steps you took with React, Next.js, and scaling protocols. 3) The concrete business metric outcome (e.g. 'reduced latency by 40%').`}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Expandable Your Response transcript drawer */}
+            <details className="group border-t border-white/5 pt-4">
+              <summary className="cursor-pointer list-none text-xs font-bold text-violet-400 hover:text-violet-300 flex items-center gap-1 uppercase tracking-wider select-none">
+                Your Response Details
+                <span className="text-[8px] group-open:rotate-180 transition-transform">▼</span>
+              </summary>
+              <div className="mt-4 space-y-3 animate-fade-in">
+                <p className="text-xs leading-relaxed text-slate-300 border-l-2 border-white/10 pl-3 italic whitespace-pre-wrap">
+                  {activeInsight.answer.answer}
+                </p>
+                
+                <button
+                  type="button"
+                  onClick={() => void handlePlayAnswer(activeInsight.answer.answer)}
+                  disabled={!speech.isSupported}
+                  className="rounded border border-white/5 bg-slate-900/60 hover:bg-slate-800 px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider text-slate-300 transition"
+                >
+                  Play Audio Synthesis
+                </button>
+              </div>
+            </details>
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-white/5 bg-[#121820]/80 p-8 text-center text-slate-500 text-xs italic">
+          No answer logs captured in this session.
+        </div>
+      )}
 
       {/* Captured screenshots timeline */}
       {screenshots.length > 0 && (
         <div className="space-y-4">
-          <span className="text-[10px] uppercase tracking-widest font-semibold text-slate-400">Visual Artifact Ledger</span>
+          <span className="text-[10px] uppercase tracking-widest font-extrabold text-slate-400 block">Visual Artifact Ledger</span>
           <div className="grid gap-4 md:grid-cols-2">
             {screenshots.map((answer, index) => (
               <figure key={answer.questionId} className="rounded-xl border border-white/5 bg-[#121820]/80 p-4 space-y-3 shadow-lg">
@@ -480,164 +396,57 @@ export function FeedbackView({ feedback, answers, expertAnswerRewrites, nonVerba
           </div>
         </div>
       )}
-
     </section>
   );
 }
 
-// Progress metrics gauge display
-function MetricProgressCard({ label, value, theme }: { label: string; value: number; theme: "teal" | "amber" }) {
+// Circular progress meter widget
+function CircularProgress({
+  percent,
+  label,
+  subtitle,
+  strokeColor
+}: {
+  percent: number;
+  label: string;
+  subtitle: string;
+  strokeColor: string;
+}) {
+  const radius = 38;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (percent / 100) * circumference;
+
   return (
-    <div className="rounded-lg border border-white/5 bg-slate-950/40 p-4 space-y-3">
-      <div className="flex justify-between items-baseline">
-        <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">{label}</span>
-        <span className="text-lg font-bold text-white font-mono">{value}%</span>
-      </div>
-      <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all duration-1000 ${
-            theme === "teal" ? "bg-teal-400" : "bg-amber-400"
-          }`}
-          style={{ width: `${value}%` }}
-        />
+    <div className="flex flex-col items-center p-5 bg-[#121820]/80 border border-white/5 rounded-2xl shadow-xl space-y-3 text-center">
+      <span className="text-[10px] uppercase tracking-widest text-slate-400 font-extrabold">{subtitle}</span>
+      <div className="relative h-28 w-28 flex items-center justify-center">
+        <svg className="h-full w-full transform -rotate-90" viewBox="0 0 100 100">
+          <circle
+            cx="50"
+            cy="50"
+            r={radius}
+            className="stroke-slate-800/40"
+            strokeWidth="7"
+            fill="transparent"
+          />
+          <circle
+            cx="50"
+            cy="50"
+            r={radius}
+            stroke={strokeColor}
+            strokeWidth="7"
+            fill="transparent"
+            strokeDasharray={circumference}
+            strokeDashoffset={strokeDashoffset}
+            strokeLinecap="round"
+            className="transition-all duration-1000 ease-out"
+          />
+        </svg>
+        <div className="absolute flex flex-col items-center justify-center text-center px-2">
+          <span className="text-[10px] font-extrabold text-white leading-tight uppercase tracking-wider">{label}</span>
+          <span className="text-[9px] text-slate-500 font-mono font-bold mt-0.5">{percent}%</span>
+        </div>
       </div>
     </div>
   );
-}
-
-function getAnswerInsight(answer: AnswerRecord, index: number) {
-  const text = answer.answer.trim();
-  const lower = text.toLowerCase();
-  let score = 40 + index * 2;
-
-  if (text.length > 24) score += 8;
-  if (text.length > 80) score += 12;
-  if (text.length > 180) score += 8;
-
-  const sentenceCount = text.split(/[.!?]+/).filter(Boolean).length;
-  if (sentenceCount >= 2) score += 8;
-  if (sentenceCount >= 4) score += 4;
-
-  if (/for example|for instance|specifically|measur(e|ed)|result|outcome|tradeoff|because|so that/i.test(text)) {
-    score += 10;
-  }
-
-  if (answer.screenshot) score += 8;
-
-  if (answer.type === "technical" && /api|code|test|cache|latency|state|component|database|query|deploy|bug/i.test(text)) {
-    score += 8;
-  }
-
-  if (answer.type === "behavioral" && /team|stakeholder|feedback|conflict|ownership|collaborat|influenc|resolved/i.test(text)) {
-    score += 8;
-  }
-
-  if (answer.type === "system_design" && /scale|reliab|monitor|failure|queue|shard|replica|consistency|throughput/i.test(text)) {
-    score += 8;
-  }
-
-  if (/i don't know|not sure|maybe|sort of|kind of|whatever/i.test(lower)) {
-    score -= 16;
-  }
-
-  if (text.length < 20) score -= 12;
-
-  score = clamp(score, 0, 100);
-
-  return {
-    answer,
-    score,
-    note: buildAnswerNote(answer, score),
-    followUp: buildFollowUpQuestion(answer, score)
-  };
-}
-
-function buildAnswerNote(answer: AnswerRecord, score: number) {
-  if (score >= 85) return `Strong ${answer.type.replace("_", " ")} competency signal with concrete details.`;
-  if (score >= 70) return `Good structure, but could emphasize more architectural depths.`;
-  if (score >= 55) return `Adequate response with thin details. Expand specific technical metrics.`;
-  return `Underdeveloped response. Lacks clear structural framework and trade-off considerations.`;
-}
-
-function buildFollowUpQuestion(answer: AnswerRecord, score: number) {
-  const trimmedQuestion = truncate(answer.question, 72);
-  const shortAnswer = truncate(answer.answer, 90);
-
-  if (answer.type === "technical") {
-    if (score >= 70) {
-      return `You stated “${shortAnswer}”. What alternate designs were available, and how did you measure performance tradeoffs?`;
-    }
-
-    return `Can you explain the exact engineering challenges behind the “${trimmedQuestion}” problem with a real world case?`;
-  }
-
-  if (answer.type === "behavioral") {
-    if (score >= 70) {
-      return `Can you highlight your direct team contribution, and explain the key metrics measuring project success?`;
-    }
-
-    return `What was the exact resolution mechanism you chose, and what core lesson did your team obtain?`;
-  }
-
-  if (score >= 70) {
-    return `How would this architecture scale under a 10x query load or a persistent microservice outage?`;
-  }
-
-  return `Can you build on the “${trimmedQuestion}” answer by explicitly explaining scaling constraints, replication rules, and logs?`;
-}
-
-function getRecommendation(score: number, weakCount: number) {
-  if (score >= 82 && weakCount === 0) {
-    return {
-      label: "Strong Hire",
-      tint: "border-teal-400/20 bg-teal-500/10 text-teal-400",
-      summary: "Candidate displays strong analytical layout capabilities, concrete contextual indicators, and thorough technical details."
-    };
-  }
-
-  if (score >= 68) {
-    return {
-      label: "Lean Hire",
-      tint: "border-sky-400/20 bg-sky-500/10 text-sky-400",
-      summary: "Candidate exhibits adequate competency across multiple questions, but shows slight gaps in specific detail depths."
-    };
-  }
-
-  if (score >= 55) {
-    return {
-      label: "Borderline",
-      tint: "border-amber-400/20 bg-amber-500/10 text-amber-400",
-      summary: "Candidate answers display highly variable depth indicators. Additional deep technical scoping is recommended."
-    };
-  }
-
-  return {
-    label: "No Hire",
-    tint: "border-rose-400/20 bg-rose-500/10 text-rose-400",
-    summary: "Responses lacked required depth structures or technical specifics. Core architectural signal is thin."
-  };
-}
-
-function buildManagerSummary(
-  recommendation: ReturnType<typeof getRecommendation>,
-  score: number,
-  answerInsights: ReturnType<typeof getAnswerInsight>[],
-  weakAnswers: ReturnType<typeof getAnswerInsight>[]
-) {
-  if (!answerInsights.length) {
-    return "Insufficient data captured during this session to produce a hiring consensus brief.";
-  }
-
-  const strengths = answerInsights.filter((insight) => insight.score >= 70).length;
-  const risks = weakAnswers.length;
-  return `${recommendation.summary} Overall consensus rating compiles at ${score}%, with ${strengths} strength signal indicators and ${risks} risk indicators recorded in session.`;
-}
-
-function truncate(text: string, maxLength: number) {
-  if (text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength - 1).trimEnd()}…`;
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
 }

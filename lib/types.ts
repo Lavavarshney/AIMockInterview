@@ -30,6 +30,7 @@ export type NonVerbalMetrics = {
   lookingAwayPercent: number;
   faceVisiblePercent: number;
   expressionPositivity: number;
+  confidenceScore: number;
 };
 
 export type ExpertAnswerRewrite = {
@@ -38,6 +39,17 @@ export type ExpertAnswerRewrite = {
   originalAnswer: string;
   expertAnswer: string;
   missingSignals: string[];
+};
+
+export type CompletedInterview = {
+  id: string;
+  date: string;
+  role: string;
+  type: string;
+  score: number;
+  feedback: string;
+  answers: AnswerRecord[];
+  expertAnswerRewrites: ExpertAnswerRewrite[];
 };
 
 export type ChatMessage = {

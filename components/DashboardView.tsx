@@ -1,6 +1,7 @@
 "use client";
 
-import { useInterview, type CompletedInterview } from "@/context/InterviewContext";
+import { useInterview } from "@/context/InterviewContext";
+import type { CompletedInterview } from "@/lib/types";
 
 export function DashboardView() {
   const { state, dispatch } = useInterview();
@@ -262,10 +263,10 @@ type StatCardProps = {
 
 function StatCard({ label, value, subtext, metricType }: StatCardProps) {
   return (
-    <div className="rounded-xl border border-white/5 bg-[#121820]/80 backdrop-blur-md p-5 space-y-3 shadow-md">
+    <div className="rounded-xl border border-white/5 bg-[#0d131a]/85 hover:border-violet-500/20 backdrop-blur-md p-5 space-y-3 shadow-md hover:shadow-lg transition-all duration-300 group">
       <div className="flex justify-between items-baseline">
-        <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">{label}</span>
-        <span className="bg-white/5 border border-white/10 text-[7px] font-bold px-1.5 py-0.5 rounded tracking-widest text-slate-500 uppercase">
+        <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold group-hover:text-violet-400 transition-colors">{label}</span>
+        <span className="bg-white/5 border border-white/10 text-[7px] font-bold px-1.5 py-0.5 rounded tracking-widest text-slate-400 uppercase">
           {metricType}
         </span>
       </div>

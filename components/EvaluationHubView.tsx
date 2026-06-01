@@ -1,6 +1,8 @@
 "use client";
 
-import { useInterview, type CompletedInterview } from "@/context/InterviewContext";
+import { useInterview } from "@/context/InterviewContext";
+import { scoreInterview } from "@/lib/scoring";
+import type { CompletedInterview } from "@/lib/types";
 import { useState } from "react";
 
 type InsightCategory = "strengths" | "risks" | "suggestions" | "history";
@@ -16,11 +18,12 @@ export function EvaluationHubView() {
 
   // Use values from the most recent mock session if history exists
   const latestSession = hasHistory ? state.history[0] : null;
+  const latestPerformance = latestSession ? scoreInterview(latestSession.answers) : null;
 
   const overallScore = latestSession ? latestSession.score : 0;
-  const commScore = latestSession ? Math.round(latestSession.score * 1.05 > 100 ? 100 : latestSession.score * 1.05) : 0;
-  const techScore = latestSession ? Math.round(latestSession.score * 0.98 < 0 ? 0 : latestSession.score * 0.98) : 0;
-  const clarityScore = latestSession ? Math.round((commScore + techScore) / 2) : 0;
+  const commScore = latestPerformance?.communication || 0;
+  const techScore = latestPerformance?.domain || 0;
+  const clarityScore = latestPerformance?.articulation || 0;
   const answeredCount = latestSession?.answers.length || 0;
   const screenshotCount = latestSession?.answers.filter((answer) => answer.screenshot).length || 0;
   const roleLabel = latestSession?.role || state.profile.targetRole || "target role";
@@ -31,12 +34,12 @@ export function EvaluationHubView() {
 
   function handleViewReport(report: CompletedInterview) {
     dispatch({
-      type: "SET_EVALUATION",
-      payload: { feedback: report.feedback, expertAnswerRewrites: report.expertAnswerRewrites }
-    });
-    dispatch({ type: "SET_STAGE", payload: "finished" });
-    report.answers.forEach((ans) => {
-      dispatch({ type: "ADD_ANSWER", payload: ans });
+      type: "LOAD_REPORT",
+      payload: {
+        feedback: report.feedback,
+        answers: report.answers,
+        expertAnswerRewrites: report.expertAnswerRewrites
+      }
     });
     dispatch({ type: "SET_VIEW", payload: "report" });
   }
@@ -162,7 +165,7 @@ export function EvaluationHubView() {
           label="Communication"
           value={`${commScore}%`}
           status={commScore >= 78 ? "Strong" : "Needs Work"}
-          insight="Derived from the latest completed session score."
+          insight="Derived from behavioral answer evidence."
         />
         
         <SnapshotCard
@@ -176,7 +179,7 @@ export function EvaluationHubView() {
           label="Confidence & Clarity"
           value={`${clarityScore}%`}
           status={clarityScore >= 78 ? "Strong" : "Needs Work"}
-          insight="Derived from answer completeness and available evaluation data."
+          insight="Derived from structure, length, certainty, and specificity."
         />
 
       </div>
@@ -337,9 +340,9 @@ export function EvaluationHubView() {
 // Snapshot card
 function SnapshotCard({ label, value, status, insight }: { label: string; value: string; status: string; insight: string }) {
   return (
-    <div className="rounded-xl border border-white/5 bg-[#121820]/80 backdrop-blur-md p-5 space-y-3 shadow-md">
+    <div className="rounded-xl border border-white/5 bg-[#0d131a]/85 hover:border-violet-500/20 backdrop-blur-md p-5 space-y-3 shadow-md hover:shadow-lg transition-all duration-300 group">
       <div className="flex justify-between items-baseline">
-        <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">{label}</span>
+        <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold group-hover:text-violet-400 transition-colors">{label}</span>
         <span
           className={`text-[8px] font-bold px-1.5 py-0.5 rounded tracking-widest uppercase border ${
             status === "Strong"
@@ -373,10 +376,10 @@ function CategoryCard({
   insight: string;
 }) {
   return (
-    <div className="rounded-xl border border-white/5 bg-[#121820]/80 backdrop-blur-md p-5 space-y-3 shadow-md flex flex-col justify-between">
+    <div className="rounded-xl border border-white/5 bg-[#0d131a]/85 hover:border-violet-500/20 backdrop-blur-md p-5 space-y-3 shadow-md flex flex-col justify-between hover:shadow-lg transition-all duration-300 group">
       <div className="space-y-2">
         <div className="flex justify-between items-baseline gap-2">
-          <h4 className="text-xs font-bold text-white uppercase tracking-wider">{label}</h4>
+          <h4 className="text-xs font-bold text-white uppercase tracking-wider group-hover:text-violet-400 transition-colors">{label}</h4>
           <span
             className={`text-[7px] font-bold px-1.5 py-0.5 rounded tracking-widest uppercase border ${
               pill === "Strong"

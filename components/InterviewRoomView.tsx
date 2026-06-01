@@ -53,6 +53,7 @@ export function InterviewRoomView({
   handleScreenshotCapture
 }: InterviewRoomViewProps) {
   const [seconds, setSeconds] = useState(0);
+  const [showPreviews, setShowPreviews] = useState(false);
 
   // Live session timer counting up to simulate professional interview tracking
   useEffect(() => {
@@ -62,15 +63,28 @@ export function InterviewRoomView({
     return () => clearInterval(interval);
   }, []);
 
+  // When a question requiring screenshot mounts, we can prompt or auto-highlight it
+  const hasCapturedScreenshot = Boolean(capture.previewUrl || activeScreenshot);
+
   function formatTime(sec: number) {
     const mins = Math.floor(sec / 60);
     const remaining = sec % 60;
     return `${mins.toString().padStart(2, "0")}:${remaining.toString().padStart(2, "0")}`;
   }
 
+  // Ensure local video element binds to webcam if tracking is active
+  useEffect(() => {
+    if (nonVerbal.isTracking && nonVerbal.videoRef.current) {
+      // Re-establish playback of stream
+      const stream = nonVerbal.videoRef.current.srcObject as MediaStream | null;
+      if (stream) {
+        nonVerbal.videoRef.current.play().catch(() => {});
+      }
+    }
+  }, [nonVerbal.isTracking, showPreviews]);
+
   return (
-    <div className="space-y-4 animate-fade-in">
-      
+    <div className="space-y-4 animate-fade-in text-slate-100 max-w-7xl mx-auto">
       {/* Dynamic Session Subheader Topbar */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/5 pb-3">
         <div>
@@ -97,16 +111,126 @@ export function InterviewRoomView({
 
       {/* Two Column focused room grid */}
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
-        
         {/* Left: Chat stream panel */}
         <div className="space-y-4">
           <ChatInterface messages={chat} currentQuestion={currentQuestion} />
         </div>
 
-        {/* Right Pane: Telemetry widgets & input */}
+        {/* Right Pane: Collapsible Telemetry status & Formulate response inputs */}
         <aside className="space-y-5">
-          
-          {/* Voice wave monitor */}
+          {/* Collapsible Telemetry Status Panel */}
+          <section className="rounded-xl border border-white/5 bg-[#121820]/80 backdrop-blur-md p-5 space-y-4 shadow-xl">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block">
+                Telemetry Status Panel
+              </span>
+              
+              <button
+                type="button"
+                onClick={() => setShowPreviews(!showPreviews)}
+                className="text-[10px] uppercase tracking-widest text-violet-400 hover:text-violet-300 font-bold"
+              >
+                {showPreviews ? "[Hide Preview Feeds]" : "[Show Preview Feeds]"}
+              </button>
+            </div>
+
+            {/* Micro Operational Status Pills */}
+            <div className="flex flex-wrap gap-2 pt-1">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-[#090d12]/60 border border-white/5 px-2.5 py-1 text-[9px] font-bold text-emerald-400 uppercase tracking-wider">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                Audio Active
+              </span>
+
+              <span className={`inline-flex items-center gap-1.5 rounded-full bg-[#090d12]/60 border border-white/5 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider ${
+                nonVerbal.isTracking ? "text-emerald-400" : "text-slate-500"
+              }`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${nonVerbal.isTracking ? "bg-emerald-400" : "bg-slate-700"}`} />
+                Camera {nonVerbal.isTracking ? "Active" : "Offline"}
+              </span>
+
+              <span className={`inline-flex items-center gap-1.5 rounded-full bg-[#090d12]/60 border border-white/5 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider ${
+                capture.stream ? "text-emerald-400" : "text-slate-500"
+              }`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${capture.stream ? "bg-emerald-400" : "bg-slate-700"}`} />
+                Screen {capture.stream ? "Linked" : "Offline"}
+              </span>
+
+              {requiresScreenshot && !hasCapturedScreenshot && (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 border border-amber-500/25 px-2.5 py-1 text-[9px] font-bold text-amber-400 uppercase tracking-wider animate-pulse">
+                  ⚠️ Capture Required
+                </span>
+              )}
+            </div>
+
+            {/* Previews drawer shown on demand */}
+            {showPreviews && (
+              <div className="space-y-4 pt-3 border-t border-white/5 animate-fade-in">
+                {/* Local Webcam Telemetry Feed */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between items-center text-[8px] uppercase tracking-widest text-slate-500 font-bold">
+                    <span>Webcam Telemetry</span>
+                    {nonVerbal.isTracking && (
+                      <span className="text-emerald-400">Eye-Contact tracking active</span>
+                    )}
+                  </div>
+                  
+                  <div className="relative aspect-video w-full rounded-lg overflow-hidden bg-slate-950 border border-white/5 flex items-center justify-center">
+                    {nonVerbal.isTracking ? (
+                      <video
+                        ref={nonVerbal.videoRef}
+                        muted
+                        playsInline
+                        autoPlay
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4">
+                        <span className="text-[10px] text-slate-500">Camera preview is offline. Activate it below if needed.</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (nonVerbal.isTracking) {
+                        nonVerbal.stop();
+                      } else {
+                        void nonVerbal.start();
+                      }
+                    }}
+                    className={`w-full rounded-md py-1.5 text-[9px] font-bold uppercase tracking-wider transition ${
+                      nonVerbal.isTracking
+                        ? "border border-rose-500/30 bg-rose-500/10 text-rose-400 hover:bg-rose-500 hover:text-white"
+                        : "border border-teal-500/30 bg-teal-500/10 text-teal-400 hover:bg-teal-500 hover:text-slate-950"
+                    }`}
+                  >
+                    {nonVerbal.isTracking ? "Disable Local Camera" : "Enable Local Camera"}
+                  </button>
+                </div>
+
+                {/* Local Screen Share Workspace */}
+                {requiresScreenshot && (
+                  <div className="space-y-1.5">
+                    <ScreenCapture
+                      videoRef={capture.videoRef}
+                      stream={capture.stream}
+                      previewUrl={capture.previewUrl || activeScreenshot}
+                      livePreviewUrl={capture.livePreviewUrl}
+                      streamStatus={capture.streamStatus}
+                      hasStream={Boolean(capture.stream)}
+                      isSupported={capture.isSupported}
+                      onStart={handleScreenStart}
+                      onCapture={handleScreenshotCapture}
+                      onStop={capture.stopSharing}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+
+          {/* Voice wave monitor (Clean compact view) */}
           <VoiceIndicator
             isListening={recognition.isListening}
             isSpeaking={speech.isSpeaking}
@@ -117,27 +241,13 @@ export function InterviewRoomView({
             onStop={recognition.stopListening}
           />
 
-          {/* Screen capture console (conditional) */}
-          {currentQuestion && requiresScreenshot && (
-            <ScreenCapture
-              videoRef={capture.videoRef}
-              stream={capture.stream}
-              previewUrl={capture.previewUrl || activeScreenshot}
-              livePreviewUrl={capture.livePreviewUrl}
-              streamStatus={capture.streamStatus}
-              hasStream={Boolean(capture.stream)}
-              isSupported={capture.isSupported}
-              onStart={handleScreenStart}
-              onCapture={handleScreenshotCapture}
-              onStop={capture.stopSharing}
-            />
-          )}
-
           {/* Active Response formulation console */}
           {currentQuestion && (
             <section className="rounded-xl border border-white/5 bg-[#121820]/80 backdrop-blur-md p-5 space-y-4 shadow-xl">
               <div className="flex items-center justify-between gap-3">
-                <span className="text-xs uppercase tracking-wider text-slate-400 font-semibold block">Formulate Response</span>
+                <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block">
+                  Formulate Response
+                </span>
                 
                 <button
                   type="button"
@@ -156,7 +266,7 @@ export function InterviewRoomView({
                   setVoiceNeedsReview(false);
                 }}
                 className="h-32 w-full resize-none rounded-lg border border-white/5 bg-[#090d12]/85 p-4 text-xs leading-relaxed text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-violet-500/50 font-mono"
-                placeholder="Type response, or review transcribed speech text here before final submission..."
+                placeholder="Type your answer, or review transcribed speech text here before final submission..."
               />
 
               {voiceNeedsReview && (
@@ -171,7 +281,7 @@ export function InterviewRoomView({
                   onClick={onSkip}
                   className="w-1/3 rounded-lg border border-white/5 bg-slate-900/60 hover:bg-slate-800 text-xs font-bold uppercase tracking-wider text-slate-300 transition"
                 >
-                  Skip Question
+                  Skip
                 </button>
 
                 <button
@@ -187,9 +297,7 @@ export function InterviewRoomView({
           )}
 
         </aside>
-
       </div>
-
     </div>
   );
 }
