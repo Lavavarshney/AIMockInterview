@@ -16,6 +16,27 @@ type SetupViewProps = {
   generating: boolean;
 };
 
+const PDFJS_VERSION = "3.11.174";
+
+async function loadPdfJs() {
+  const existing = (window as any).pdfjsLib;
+  if (existing) return existing;
+
+  await new Promise<void>((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.min.js`;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Unable to load PDF parser."));
+    document.head.appendChild(script);
+  });
+
+  const pdfjs = (window as any).pdfjsLib;
+  if (!pdfjs) throw new Error("PDF parser did not initialize.");
+  pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.worker.min.js`;
+  return pdfjs;
+}
+
 export function SetupView({
   jobDescription,
   onJobDescriptionChange,
@@ -186,8 +207,7 @@ export function SetupView({
                     onResumeFileNameChange(file.name);
                     try {
                       const arrayBuffer = await file.arrayBuffer();
-                      const pdfjs: any = await import("pdfjs-dist/build/pdf");
-                      pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
+                      const pdfjs = await loadPdfJs();
                       const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
                       let extracted = "";
                       for (let i = 1; i <= pdf.numPages; i++) {
