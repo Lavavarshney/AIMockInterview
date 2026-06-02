@@ -90,6 +90,7 @@ export async function POST(request: Request) {
     try {
       const completion = await ai.chat.completions.create({
         model: getEvaluationModel(),
+        max_tokens: 4000,
         messages: [
           {
             role: "system",
@@ -202,6 +203,7 @@ async function buildExpertAnswerRewrites(body: EvaluationRequest, transcriptText
     const ai = getAIClient();
     const completion = await ai.chat.completions.create({
       model: getEvaluationModel(),
+      max_tokens: 1800,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: system },

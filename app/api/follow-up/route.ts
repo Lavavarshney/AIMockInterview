@@ -18,19 +18,20 @@ type FollowUpResponse = {
 };
 
 export async function POST(request: Request) {
+  let body: FollowUpRequest | null = null;
   try {
-    const body = (await request.json()) as FollowUpRequest;
+    body = (await request.json()) as FollowUpRequest;
     if (!body.question?.question || !body.answer) {
       return NextResponse.json({ shouldAsk: false } satisfies FollowUpResponse);
     }
 
     const localFollowUp = buildLocalFollowUp(body);
-    if (localFollowUp.shouldAsk) {
+    if (getAIProvider() === "none") {
       return NextResponse.json(localFollowUp);
     }
 
-    if (getAIProvider() === "none") {
-      return NextResponse.json({ shouldAsk: false } satisfies FollowUpResponse);
+    if (localFollowUp.shouldAsk) {
+      return NextResponse.json(localFollowUp);
     }
 
     const system =
@@ -53,6 +54,7 @@ export async function POST(request: Request) {
     const ai = getAIClient();
     const completion = await ai.chat.completions.create({
       model: getQuestionModel(),
+      max_tokens: 220,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: system },
@@ -62,7 +64,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json(normalizeFollowUp(JSON.parse(completion.choices[0]?.message.content || "{}") as FollowUpResponse));
   } catch {
-    return NextResponse.json({ shouldAsk: false } satisfies FollowUpResponse);
+    return NextResponse.json(body ? buildLocalFollowUp(body) : ({ shouldAsk: false } satisfies FollowUpResponse));
   }
 }
 
@@ -78,6 +80,31 @@ function buildLocalFollowUp(body: FollowUpRequest): FollowUpResponse {
   const answer = body.answer.trim();
   const vague = answer.length < 90 || /i don't know|maybe|not sure|kind of|sort of|skip/i.test(answer.toLowerCase());
   const keywords = extractAnswerKeywords(answer);
+  const questionText = body.question.question.toLowerCase();
+  const isSystem = body.question.type === "system_design";
+  const isTechnical = body.question.type === "technical";
+  const isBehavioral = body.question.type === "behavioral";
+
+  if (isSystem && !/\b(api|data model|database|reliability|observability|scale|latency|queue|cache|monitor)\b/i.test(answer)) {
+    return {
+      shouldAsk: true,
+      question: "Can you make the design concrete by naming the APIs, data model, reliability risks, and one metric you would monitor?"
+    };
+  }
+
+  if (isTechnical && !/\b(implementation|code|test|complexity|edge case|debug|api|state|database|latency|tradeoff)\b/i.test(answer)) {
+    return {
+      shouldAsk: true,
+      question: "Can you go one level deeper into the implementation, including edge cases, tests, and the main tradeoff?"
+    };
+  }
+
+  if (isBehavioral && !/\b(result|impact|changed|owned|led|influenced|stakeholder|metric|feedback|conflict)\b/i.test(answer)) {
+    return {
+      shouldAsk: true,
+      question: "Can you turn that into a specific story with the situation, your action, and the outcome?"
+    };
+  }
 
   if (!vague && keywords.length > 0 && !/\b(metric|users|latency|revenue|time|percent|impact|result|reduced|improved|increased)\b/i.test(answer)) {
     return {
@@ -92,6 +119,8 @@ function buildLocalFollowUp(body: FollowUpRequest): FollowUpResponse {
     shouldAsk: true,
     question: keywords.length
       ? `Can you make the ${keywords[0]} part more concrete with your exact contribution and one result?`
+      : questionText.includes("why")
+      ? "Can you give one concrete example that proves that reasoning?"
       : "Can you make that more concrete with one example, your exact contribution, and a measurable result?"
   };
 }

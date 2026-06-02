@@ -97,6 +97,13 @@ export function HireFlowApp() {
     }
   }, [dispatch, isAuthLoaded, isLoaded, isSignedIn, state.auth.loggedIn, user]);
 
+  // Redirect to dashboard once successfully logged in if they were on the auth screen
+  useEffect(() => {
+    if (state.auth.loggedIn && state.currentView === "auth") {
+      dispatch({ type: "SET_VIEW", payload: "dashboard" });
+    }
+  }, [state.auth.loggedIn, state.currentView, dispatch]);
+
   async function buildAuthHeaders() {
     const headers: HeadersInit = {};
     const token = await getToken();
@@ -203,11 +210,23 @@ export function HireFlowApp() {
       dispatch({ type: "SET_STAGE", payload: "generating" });
       dispatch({ type: "ADD_CHAT", payload: { role: "system", content: "Generating tailored questions..." } });
       dispatch({ type: "SET_VIEW", payload: "room" }); // Transition to Room immediately!
-      const data = await postJson<{ questions: InterviewQuestion[] }>("/api/generate-questions", {
+      const data = await postJson<{
+        questions: InterviewQuestion[];
+        meta?: { provider?: string; model?: string; fallbackUsed?: boolean; focus?: string; questionCount?: number };
+      }>("/api/generate-questions", {
         jobDescription: state.jobDescription,
         resume: resumeText.trim(),
         profile: state.profile
       });
+      if (data.meta?.fallbackUsed) {
+        dispatch({
+          type: "ADD_TOAST",
+          payload: {
+            type: "info",
+            message: `Using local ${data.meta.focus || state.profile.preferredType} questions because the AI provider did not return usable questions.`
+          }
+        });
+      }
       dispatch({ type: "SET_QUESTIONS", payload: data.questions });
       await askQuestion(data.questions[0]);
     } catch (error) {
@@ -394,7 +413,7 @@ export function HireFlowApp() {
           answer,
           transcript
         }, 0),
-        2500
+        7000
       );
       return data.shouldAsk ? data.question || "" : "";
     } catch {

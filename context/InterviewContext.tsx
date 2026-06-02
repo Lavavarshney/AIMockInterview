@@ -41,6 +41,7 @@ export type ProfileState = {
   targetRole: string;
   experienceLevel: string;
   preferredType: string;
+  targetDuration: string;
 };
 
 type InterviewState = {
@@ -108,7 +109,8 @@ const initialState: InterviewState = {
     name: "",
     targetRole: "",
     experienceLevel: "Not set",
-    preferredType: "Technical"
+    preferredType: "Technical",
+    targetDuration: "30 Min"
   },
   history: []
 };
@@ -189,8 +191,7 @@ function reducer(state: InterviewState, action: InterviewAction): InterviewState
       return {
         ...state,
         auth: { loggedIn: true, email: action.payload.email },
-        profile: { ...state.profile, name: action.payload.name || state.profile.name },
-        currentView: "dashboard"
+        profile: { ...state.profile, name: action.payload.name || state.profile.name }
       };
     case "LOGOUT":
       return {

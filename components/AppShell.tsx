@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useInterview, type AppView } from "@/context/InterviewContext";
 import { SignOutButton, useUser } from "@clerk/nextjs";
@@ -31,8 +31,8 @@ export function AppShell({ children }: AppShellProps) {
     setMobileMenuOpen(false);
   }
 
-  // If public or landing (not logged in) view, show page with simple top navigation
-  if (isPublicView && !loggedIn) {
+  // If public or landing view, show page with simple top navigation
+  if (isPublicView) {
     return (
       <div className="min-h-screen bg-[#090d12] text-slate-100 flex flex-col justify-between">
         {/* Top Navbar */}
@@ -52,22 +52,34 @@ export function AppShell({ children }: AppShellProps) {
             </div>
 
             <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => navigateTo("auth")}
-                className="rounded-md border border-white/10 hover:border-white/20 bg-white/5 hover:bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-slate-200 transition"
-              >
-                Sign In
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  navigateTo("auth");
-                }}
-                className="rounded-md bg-gradient-to-r from-violet-500 to-indigo-600 hover:from-violet-400 hover:to-indigo-500 text-white px-4 py-2 text-xs font-semibold uppercase tracking-widest transition shadow-[0_0_20px_rgba(124,58,237,0.2)]"
-              >
-                Start Practicing
-              </button>
+              {!loggedIn ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => navigateTo("auth")}
+                    className="rounded-md border border-white/10 hover:border-white/20 bg-white/5 hover:bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-slate-200 transition"
+                  >
+                    Sign In
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigateTo("auth");
+                    }}
+                    className="rounded-md bg-gradient-to-r from-violet-500 to-indigo-600 hover:from-violet-400 hover:to-indigo-500 text-white px-4 py-2 text-xs font-semibold uppercase tracking-widest transition shadow-[0_0_20px_rgba(124,58,237,0.2)]"
+                  >
+                    Start Practicing
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => navigateTo("dashboard")}
+                  className="rounded-md bg-gradient-to-r from-violet-500 to-indigo-600 hover:from-violet-400 hover:to-indigo-500 text-white px-5 py-2 text-xs font-semibold uppercase tracking-widest transition shadow-[0_0_20px_rgba(124,58,237,0.2)]"
+                >
+                  Dashboard
+                </button>
+              )}
             </div>
           </div>
         </header>

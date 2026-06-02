@@ -56,14 +56,14 @@ export function SetupView({
   const [role, setRole] = useState(state.profile.targetRole);
   const [exp, setExp] = useState(state.profile.experienceLevel);
   const [type, setType] = useState(state.profile.preferredType);
-  const [duration, setDuration] = useState("30 Min");
+  const [duration, setDuration] = useState(state.profile.targetDuration);
 
   const canStart = jobDescription.trim().length > 80 && !generating;
 
   function handleSaveStep1() {
     dispatch({
       type: "UPDATE_PROFILE",
-      payload: { targetRole: role, experienceLevel: exp, preferredType: type }
+      payload: { targetRole: role, experienceLevel: exp, preferredType: type, targetDuration: duration }
     });
     setCurrentStep(2);
   }

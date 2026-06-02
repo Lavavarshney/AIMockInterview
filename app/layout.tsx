@@ -5,7 +5,10 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "HireFlow",
-  description: "AI mock interviewer with voice, screen capture, and AI feedback"
+  description: "AI mock interviewer with voice, screen capture, and AI feedback",
+  icons: {
+    icon: "/icon.svg"
+  }
 };
 
 export default function RootLayout({

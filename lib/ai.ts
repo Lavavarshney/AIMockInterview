@@ -67,7 +67,7 @@ export function getAIClient() {
 export function getQuestionModel() {
   const provider = getAIProvider();
   if (provider === "gemini") return process.env.GEMINI_QUESTION_MODEL || "gemini-2.5-flash";
-  if (provider === "openrouter") return process.env.OPENROUTER_QUESTION_MODEL || "google/gemini-2.0-flash-001";
+  if (provider === "openrouter") return process.env.OPENROUTER_QUESTION_MODEL || "google/gemini-2.5-flash";
   if (provider === "groq") return process.env.GROQ_QUESTION_MODEL || "llama-3.3-70b-versatile";
   return process.env.OPENAI_QUESTION_MODEL || "gpt-4o-mini";
 }
@@ -75,7 +75,7 @@ export function getQuestionModel() {
 export function getEvaluationModel() {
   const provider = getAIProvider();
   if (provider === "gemini") return process.env.GEMINI_EVALUATION_MODEL || "gemini-2.5-flash";
-  if (provider === "openrouter") return process.env.OPENROUTER_EVALUATION_MODEL || "google/gemini-2.0-flash-001";
+  if (provider === "openrouter") return process.env.OPENROUTER_EVALUATION_MODEL || "google/gemini-2.5-flash";
   if (provider === "groq") return process.env.GROQ_EVALUATION_MODEL || "llama-3.3-70b-versatile";
   return process.env.OPENAI_EVALUATION_MODEL || "gpt-4o";
 }
