@@ -13,7 +13,7 @@ HireFlow is a complete Next.js 14 App Router app for running an AI-powered mock 
 - Gemini, Groq, or OpenAI for question generation, natural phrasing, and feedback.
 - Gemini and OpenAI can evaluate transcript plus screenshots; Groq mode evaluates transcript text and notes captured screenshots.
 - In-memory state with React Context and `useReducer`.
-- Clerk authentication, still no database.
+- Clerk authentication.
 
 ## Setup
 
